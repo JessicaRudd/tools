@@ -74,8 +74,28 @@ def find_category_folder(drive_root: str, target_category: str) -> str:
                 return os.path.join(root, d)
     return None
 
+def get_available_drive_roots():
+    home = os.path.expanduser("~")
+    roots = {}
+    try:
+        for d in os.listdir(home):
+            if d.endswith(" - Google Drive"):
+                account = d.replace(" - Google Drive", "")
+                drive_root = os.path.join(home, d, "My Drive")
+                if os.path.exists(drive_root):
+                    roots[account] = drive_root
+    except Exception:
+        pass
+        
+    # Fallback if old format exists
+    old_root = os.path.join(home, "Google Drive", "My Drive")
+    if os.path.exists(old_root) and not roots:
+        roots["default"] = old_root
+        
+    return roots
+
 @mcp.tool()
-def push_to_drive(file_path: str, category: str, descriptive_name: str, execute: bool = False, always_allow: bool = False) -> str:
+def push_to_drive(file_path: str, category: str, descriptive_name: str, execute: bool = False, always_allow: bool = False, target_account: str = None) -> str:
     """
     Move the file to the Google Drive folder for the given category with the descriptive name.
     The descriptive_name should usually be in the format 'YYYY-MM-DD_name.ext'.
@@ -84,13 +104,32 @@ def push_to_drive(file_path: str, category: str, descriptive_name: str, execute:
     1. By default (execute=False), this tool will return the planned destination. You MUST show this to the user and ask for permission before moving the file.
     2. If the user approves, call this tool again with execute=True.
     3. If the user says "always allow", call this tool with execute=True and always_allow=True. This will save their preference.
+    4. If there are multiple accounts, the user can specify target_account or the tool will prompt for it.
     """
     if not os.path.exists(file_path):
         return f"Error: File not found: {file_path}"
         
-    drive_root = os.path.expanduser("~/Google Drive/My Drive")
-    if not os.path.exists(drive_root):
-        return f"Error: Google Drive root folder not found at {drive_root}"
+    drive_roots = get_available_drive_roots()
+    if not drive_roots:
+        return "Error: No Google Drive folders found in your home directory."
+        
+    config = load_config()
+    
+    if not target_account:
+        target_account = config.get("default_account")
+        
+    if not target_account:
+        if len(drive_roots) == 1:
+            target_account = list(drive_roots.keys())[0]
+        else:
+            accounts = list(drive_roots.keys())
+            return (f"Error: Multiple Google Drive accounts found: {accounts}. "
+                    f"Agent: Please ask the user which account they want to use, and call this tool again with target_account set to the chosen account.")
+                    
+    if target_account not in drive_roots:
+        return f"Error: The account '{target_account}' is not available. Available accounts are: {list(drive_roots.keys())}."
+        
+    drive_root = drive_roots[target_account]
         
     found_path = find_category_folder(drive_root, category)
     if found_path:
@@ -100,16 +139,15 @@ def push_to_drive(file_path: str, category: str, descriptive_name: str, execute:
         
     destination_path = os.path.join(category_path, descriptive_name)
     
-    config = load_config()
-    
     if always_allow:
         config['always_allow'] = True
+        config['default_account'] = target_account
         save_config(config)
         
     is_always_allow = config.get('always_allow', False)
     
     if not execute and not is_always_allow:
-        return (f"PLAN: File will be moved to {destination_path}. "
+        return (f"PLAN: File will be moved to {destination_path} (Account: {target_account}). "
                 f"Agent: Please ask the user for permission. "
                 f"If they approve, call this tool again with execute=True. "
                 f"If they say 'always allow', call with execute=True and always_allow=True.")
