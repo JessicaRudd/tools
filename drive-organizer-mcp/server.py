@@ -95,9 +95,64 @@ def get_available_drive_roots():
     return roots
 
 @mcp.tool()
-def push_to_drive(file_path: str, category: str, descriptive_name: str, execute: bool = False, always_allow: bool = False, target_account: str = None) -> str:
+def get_drive_structure(target_account: str = None, max_depth: int = 2) -> str:
     """
-    Move the file to the Google Drive folder for the given category with the descriptive name.
+    Get the directory structure of Google Drive up to a certain depth to suggest folder locations.
+    """
+    drive_roots = get_available_drive_roots()
+    if not drive_roots:
+        return "Error: No Google Drive folders found in your home directory."
+        
+    config = load_config()
+    
+    if not target_account:
+        target_account = config.get("default_account")
+        
+    if not target_account:
+        if len(drive_roots) == 1:
+            target_account = list(drive_roots.keys())[0]
+        else:
+            accounts = list(drive_roots.keys())
+            return (f"Error: Multiple Google Drive accounts found: {accounts}. "
+                    f"Agent: Please ask the user which account they want to use, and call this tool again with target_account set to the chosen account.")
+                    
+    if target_account not in drive_roots:
+        return f"Error: The account '{target_account}' is not available."
+        
+    drive_root = drive_roots[target_account]
+    
+    # Traverse directories
+    structure = []
+    
+    for root, dirs, files in os.walk(drive_root):
+        # Calculate current depth
+        rel_path = os.path.relpath(root, drive_root)
+        if rel_path == '.':
+            depth = 0
+        else:
+            depth = rel_path.count(os.sep) + 1
+            
+        if depth >= max_depth:
+            dirs[:] = [] # Stop traversing deeper
+            continue
+            
+        # Skip hidden directories
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        
+        for d in dirs:
+            dir_path = os.path.relpath(os.path.join(root, d), drive_root)
+            structure.append(dir_path)
+            
+    if not structure:
+        return "No folders found."
+        
+    return "Existing folders (up to depth {}):\n".format(max_depth) + "\n".join(sorted(structure))
+
+@mcp.tool()
+def push_to_drive(file_path: str, category: str = "", descriptive_name: str = "", execute: bool = False, always_allow: bool = False, target_account: str = None, target_path: str = None) -> str:
+    """
+    Move the file to the Google Drive folder.
+    Provide EITHER 'category' (to auto-find a matching loose folder) OR 'target_path' (an explicit nested path like 'Learning/Spanish').
     The descriptive_name should usually be in the format 'YYYY-MM-DD_name.ext'.
     
     HOW TO USE THIS TOOL AS AN AI AGENT:
@@ -108,6 +163,9 @@ def push_to_drive(file_path: str, category: str, descriptive_name: str, execute:
     """
     if not os.path.exists(file_path):
         return f"Error: File not found: {file_path}"
+        
+    if not category and not target_path:
+        return "Error: You must provide either 'category' or 'target_path'."
         
     drive_roots = get_available_drive_roots()
     if not drive_roots:
@@ -131,11 +189,14 @@ def push_to_drive(file_path: str, category: str, descriptive_name: str, execute:
         
     drive_root = drive_roots[target_account]
         
-    found_path = find_category_folder(drive_root, category)
-    if found_path:
-        category_path = found_path
+    if target_path:
+        category_path = os.path.join(drive_root, target_path)
     else:
-        category_path = os.path.join(drive_root, category)
+        found_path = find_category_folder(drive_root, category)
+        if found_path:
+            category_path = found_path
+        else:
+            category_path = os.path.join(drive_root, category)
         
     destination_path = os.path.join(category_path, descriptive_name)
     
@@ -162,6 +223,52 @@ def push_to_drive(file_path: str, category: str, descriptive_name: str, execute:
         return msg
     except Exception as e:
         return f"Error moving file: {e}"
+
+@mcp.tool()
+def create_drive_folder(target_path: str, target_account: str = None, execute: bool = False) -> str:
+    """
+    Create a new folder in Google Drive at the specified target_path (e.g., 'Learning/Spanish').
+    
+    HOW TO USE THIS TOOL AS AN AI AGENT:
+    1. By default (execute=False), this tool will return the planned folder creation path. You MUST show this to the user and ask for permission before creating it.
+    2. If the user approves, call this tool again with execute=True.
+    """
+    if not target_path:
+        return "Error: You must provide 'target_path'."
+        
+    drive_roots = get_available_drive_roots()
+    if not drive_roots:
+        return "Error: No Google Drive folders found in your home directory."
+        
+    config = load_config()
+    
+    if not target_account:
+        target_account = config.get("default_account")
+        
+    if not target_account:
+        if len(drive_roots) == 1:
+            target_account = list(drive_roots.keys())[0]
+        else:
+            accounts = list(drive_roots.keys())
+            return (f"Error: Multiple Google Drive accounts found: {accounts}. "
+                    f"Agent: Please ask the user which account they want to use, and call this tool again with target_account set to the chosen account.")
+                    
+    if target_account not in drive_roots:
+        return f"Error: The account '{target_account}' is not available. Available accounts are: {list(drive_roots.keys())}."
+        
+    drive_root = drive_roots[target_account]
+    category_path = os.path.join(drive_root, target_path)
+    
+    if not execute:
+        return (f"PLAN: Folder will be created at {category_path} (Account: {target_account}). "
+                f"Agent: Please ask the user for permission. "
+                f"If they approve, call this tool again with execute=True.")
+                
+    try:
+        os.makedirs(category_path, exist_ok=True)
+        return f"Successfully created folder at {category_path}"
+    except Exception as e:
+        return f"Error creating folder: {e}"
 
 if __name__ == "__main__":
     # Start the server
