@@ -270,6 +270,122 @@ def create_drive_folder(target_path: str, target_account: str = None, execute: b
     except Exception as e:
         return f"Error creating folder: {e}"
 
+@mcp.tool()
+def move_across_drives(source_account: str, source_path: str, target_account: str, target_path: str, execute: bool = False) -> str:
+    """
+    Move a file or folder from one Google Drive account to another.
+    
+    HOW TO USE THIS TOOL AS AN AI AGENT:
+    1. By default (execute=False), this tool will return the planned cross-drive move. You MUST show this to the user and ask for permission.
+    2. If the user approves, call this tool again with execute=True.
+    """
+    drive_roots = get_available_drive_roots()
+    if source_account not in drive_roots:
+        return f"Error: Source account '{source_account}' is not available. Available: {list(drive_roots.keys())}"
+    if target_account not in drive_roots:
+        return f"Error: Target account '{target_account}' is not available. Available: {list(drive_roots.keys())}"
+        
+    src_full_path = os.path.join(drive_roots[source_account], source_path)
+    dest_full_path = os.path.join(drive_roots[target_account], target_path)
+    
+    if not os.path.exists(src_full_path):
+        return f"Error: Source path does not exist: {src_full_path}"
+        
+    if not execute:
+        return (f"PLAN: Cross-Drive Move\n"
+                f"Source: {src_full_path} (Account: {source_account})\n"
+                f"Target: {dest_full_path} (Account: {target_account})\n"
+                f"Agent: Please ask the user for permission. If they approve, call with execute=True.")
+                
+    try:
+        # Create parent directories for target if they don't exist
+        os.makedirs(os.path.dirname(dest_full_path), exist_ok=True)
+        shutil.move(src_full_path, dest_full_path)
+        return f"Successfully moved '{source_path}' to '{target_account}' at '{target_path}'"
+    except Exception as e:
+        return f"Error moving across drives: {e}"
+
+@mcp.tool()
+def migration_assessment(source_account: str, target_account: str, path: str = "", max_depth: int = 1) -> str:
+    """
+    Scan two Google Drives to assess migration from source_account to target_account.
+    Returns a structured report of items to Migrate, Merge, or potentially Duplicate/Delete.
+    """
+    drive_roots = get_available_drive_roots()
+    if source_account not in drive_roots:
+        return f"Error: Source account '{source_account}' is not available. Available: {list(drive_roots.keys())}"
+    if target_account not in drive_roots:
+        return f"Error: Target account '{target_account}' is not available. Available: {list(drive_roots.keys())}"
+        
+    src_root = os.path.join(drive_roots[source_account], path)
+    tgt_root = os.path.join(drive_roots[target_account], path)
+    
+    if not os.path.exists(src_root):
+        return f"Error: Source path does not exist: {src_root}"
+        
+    report = {
+        "migrate": [], # Exists in source, missing in target
+        "merge": [],   # Folder exists in both
+        "duplicate": [] # File exists in both
+    }
+    
+    for root, dirs, files in os.walk(src_root):
+        rel_path = os.path.relpath(root, src_root)
+        if rel_path == '.':
+            depth = 0
+            rel_path = ""
+        else:
+            depth = rel_path.count(os.sep) + 1
+            
+        if depth >= max_depth:
+            dirs[:] = []
+            continue
+            
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        
+        for d in dirs:
+            dir_rel_path = os.path.join(rel_path, d) if rel_path else d
+            tgt_dir = os.path.join(tgt_root, dir_rel_path)
+            if os.path.exists(tgt_dir):
+                report["merge"].append(dir_rel_path)
+            else:
+                report["migrate"].append(dir_rel_path)
+                
+        for f in files:
+            if f.startswith('.'): continue
+            file_rel_path = os.path.join(rel_path, f) if rel_path else f
+            tgt_file = os.path.join(tgt_root, file_rel_path)
+            if os.path.exists(tgt_file):
+                report["duplicate"].append(file_rel_path)
+            else:
+                report["migrate"].append(file_rel_path)
+                
+    output = f"Migration Assessment: {source_account} -> {target_account} (Path: '{path}', Max Depth: {max_depth})\n"
+    output += "=" * 60 + "\n"
+    
+    output += "\n[TO MIGRATE] (Exists in source, missing in target):\n"
+    if report["migrate"]:
+        for item in sorted(report["migrate"]):
+            output += f"  - {item}\n"
+    else:
+        output += "  (None)\n"
+        
+    output += "\n[TO MERGE] (Folders existing in both):\n"
+    if report["merge"]:
+        for item in sorted(report["merge"]):
+            output += f"  - {item}\n"
+    else:
+        output += "  (None)\n"
+        
+    output += "\n[POTENTIAL DUPLICATES] (Files existing in both):\n"
+    if report["duplicate"]:
+        for item in sorted(report["duplicate"]):
+            output += f"  - {item}\n"
+    else:
+        output += "  (None)\n"
+        
+    return output
+
 if __name__ == "__main__":
     # Start the server
     mcp.run()
